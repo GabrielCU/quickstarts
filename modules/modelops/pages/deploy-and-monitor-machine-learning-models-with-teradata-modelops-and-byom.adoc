@@ -8,7 +8,7 @@
 
 == Overview
 
-This is a how-to for people who are new to ClearScape Analytics ModelOps. In the tutorial, you will be able to create a new project in ModelOps, upload the required data to Vantage, and track the full lifecycle of an imported Diabetes demo model using BYOM mechanisms.
+This is a how-to for people who are new to ClearScape Analytics ModelOps. This guide will show you how to work with Bring Your Own Model (BYOM) through ModelOps.
 
 == Prerequisites
 
@@ -63,11 +63,324 @@ Follow the ModelOps_Training Jupyter Notebook to setup the database, tables and 
 
 image::BYOM.png[ModelOps Methodology BYOM screenshot, width=100%]
 
-include::partial$modelops-basic.adoc[]
+== Steps in this Guide
+
+1. Create a project
+2. Environment Setup
+3. Creating tables
+4. Getting Data
+5. Creating datasets
+6. Train a model and export to PMML
+7. Import the PMML into ModelOpsA
+8. Go through Lifecycle - Evaluation (Automated Model Report)
+9. Go through Lifecycle - Approve
+10. Go through Lifecycle - Deploy (Publish and Schedule)
+11. Go through Lifecycle - Monitor (Data Drift and Performance)
+12. Configure Monitoring alert threshold (Optional)
+13. On demand Scoring from SQL (Optional)
+
+== Create a project
+
+Login into ModelOps and navigate to the Projects screen.
+
+image::Projects.png[ModelOps projects screenshot, width=100%]
+
+Click on the CREATE PROJECT button located on the top-right of the screen.
+
+* Name: "ModelOps Quickstart"
+
+* Description: "ModelOps BYOM Quickstart"
+
+* Group: your user
+
+* Path: https://github.com/Teradata/modelops-demo-models
+
+* Credentials: No Credentials
+
+* Branch: master
+
+Click the TEST GIT CONNECTION button. If the test is succesful then click on save and continue.
+
+In this guide we will skip creating a service connection and just create a personal connection.
+
+== Create a Personal Connection
+
+* Name: Quickstart Personal
+
+* Description: Quickstart Personal Connection
+
+* Host: ClearScape-url
+
+* Database: "demo_user"
+
+* VAL Database Name: "VAL"
+
+* BYOM Database Name: "MLDB"
+
+* Login Mechanism: "TDNEGO"
+
+* Username: your-username
+
+* Pasword: your-password
+
+Test the connection by clicking on the TEST CONNECTION button.
+
+Click save.
+
+== Environment Setup
+
+In this guide we will show you how to setup the evironment using the Teradata python packages. This guide provides you with the jupyter notebook that contains the required code.
+
+=== Install packages
+
+----
+pip install teradataml==17.20.0.6 teradatamodelops==7.0.3 pandas==1.1.5
+----
+
+=== Import required packages
+
+----
+from teradataml import (
+    create_context, 
+    remove_context,
+    get_context,
+    get_connection,
+    DataFrame,
+    configure,
+    execute_sql,
+)
+import os
+import getpass
+import logging
+import sys
+----
+
+=== Connect to Teradata
+
+----
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+
+
+host = input("Host:")
+username = input("Username:")
+password = getpass.getpass("Password:")
+database = input("Database (defaults to user):")
+
+if not database:
+    database = username
+
+
+engine = create_context(host=host, 
+                        username=username, 
+                        password=urllib.parse.quote(password), 
+                        logmech="TDNEGO",
+                        database=database)
+----
+
+=== Create tables
+
+Create the following tables
+
+* aoa_statistics_metadata
+* aoa_byom_models
+* pima_patient_predictions
+
+`aoa_statistics_metadata` is used to store the profiling metadata for the features so that we can consistently compute the data drift and model drift statistics. We will use the CLI to create this table.
+
+To create the statistics table you need to first add a connection to Teradata through the TMO CLI. To do this run:
+
+----
+tmo connection add
+----
+
+Then create the table by running the following command
+
+```bash
+aoa feature create-stats-table -e -m <your-db>.aoa_statistics_metadata
+```
+
+`pima_patient_predictions` is used for storing the predictions of the model scoring for the demo use case.
+
+=== Create models table
+
+----
+query = '''CREATE SET TABLE DEMO_USER.Aoa_Byom_Models 
+     (
+      model_version VARCHAR(255) CHARACTER SET LATIN NOT CASESPECIFIC,
+      model_id VARCHAR(255) CHARACTER SET LATIN NOT CASESPECIFIC,
+      model_type VARCHAR(255) CHARACTER SET LATIN NOT CASESPECIFIC,
+      project_id VARCHAR(255) CHARACTER SET LATIN NOT CASESPECIFIC,
+      deployed_at TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6),
+      model BLOB(2097088000))
+UNIQUE PRIMARY INDEX ( model_version );
+'''
+
+try:
+    execute_sql(query)
+except:
+    execute_sql('DROP TABLE DEMO_USER.Aoa_Byom_Models;')
+    execute_sql(query)
+----
+
+=== Create predictions table
+
+----
+#ddl for Pima_Patient_Predictions
+query = '''CREATE MULTISET TABLE DEMO_USER.Pima_Patient_Predictions 
+     (
+      job_id VARCHAR(255) CHARACTER SET LATIN NOT CASESPECIFIC,
+      PatientId BIGINT,
+      HasDiabetes BIGINT,
+      json_report CLOB(1048544000) CHARACTER SET LATIN)
+PRIMARY INDEX ( job_id );;
+'''
+ 
+try:
+    execute_sql(query)
+except:
+    execute_sql('DROP TABLE DEMO_USER.Pima_Patient_Predictions;')
+    execute_sql(query)
+----
+
+=== Getting data
+
+Create and import the data for the following tables
+
+* pima_patient_features
+* pima_patient_diagnoses
+* aoa_statistics_metadata
+
+`pima_patient_features` contains the features related to the patients medical history.
+
+`pima_patient_diagnoses` contains the diabetes diagnostic results for the patients.
+
+`aoa_statistics_metadata` contains the feature statistics metadata for the `pima_patient_features` and `pima_patient_diagnoses`
+
+Note the `pima_patient_feature` can be populated via the CLI by executing 
+
+Compute the statistics metadata for the continuous variables
+----
+aoa feature compute-stats \
+        -s <feature-db>.<feature-data> \
+        -m <statistics-metadata-db>.<statistics-metadata-table> \
+        -t continuous -c numtimesprg,plglcconc,bloodp,skinthick,twohourserins,bmi,dipedfunc,age
+----
+
+Compute the statistics metadata for the categorical variables
+----
+aoa feature compute-stats \
+        -s <feature-db>.<feature-data> \
+        -m <statistics-metadata-db>.<statistics-metadata-table> \
+        -t categorical -c hasdiabetes
+----
+
+=== Import data
+
+----
+from teradataml import copy_to_sql, DataFrame
+from teradatasqlalchemy.types import *
+import pandas as pd
+
+df = pd.read_csv("data/pima_patient_features.csv")
+copy_to_sql(df=df, 
+            table_name="pima_patient_features",     
+            schema_name=database,
+            primary_index="PatientId", 
+            if_exists="replace",  
+            types={
+                "PatientId": INTEGER,
+                "NumTimesPrg": INTEGER, 
+                "PlGlcConc": INTEGER,
+                "BloodP": INTEGER,
+                "SkinThick": INTEGER,
+                "TwoHourSerIns": INTEGER,
+                "BMI": FLOAT,
+                "DiPedFunc": FLOAT,
+                "Age": INTEGER
+            })
+
+df = pd.read_csv("data/pima_patient_diagnoses.csv")
+copy_to_sql(df=df, 
+            table_name="pima_patient_diagnoses",     
+            schema_name=database,
+            primary_index="PatientId", 
+            if_exists="replace",  
+            types={
+                "PatientId": INTEGER,
+                "HasDiabetes": INTEGER
+            })
+
+# we can compute this from the CLI also - but lets import pre-computed for now.
+df = pd.read_csv("data/aoa_statistics_metadata.csv")
+copy_to_sql(df=df, 
+            table_name="aoa_statistics_metadata",     
+            schema_name=database,
+            if_exists="append")
+----
+
+== Creating training and evaluation datasets
+
+Click on your newly created project and then click on the Datasets button located on the left menu bar. Click on CREATE DATASET TEMPLATE.
+
+Enter the following:
+
+* Name: PIMA
+
+* Description: PIMA Diabetes
+
+* Feature Catalog: Vantage
+
+* Database: your-db
+
+* Table: aoa_feature_metadata
+
+Click next and enter the Features Query
+
+----
+SELECT * FROM pima_patient_features
+----
+
+Continue to Entity & Target and include the query:
+
+----
+SELECT * FROM pima_patient_diagnoses as F WHERE F.patientid MOD 5 <> 0
+----
+
+Select HasDiabetes as the target variable.
+
+Continue to Predictions and include the details of the database, table, and the query:
+
+
+Database: your-db
+Table: pima_patient_predictions
+Query:
+----
+SELECT * FROM pima_patient_features WHERE patientid MOD 5 = 0
+----
+
+=== Create Training dataset
+
+Click on create dataset
+
+Enter the name and description.
+
+Select training and click next.
+
+Confirm the query and click on create.
+
+=== Create Evaluation dataset
+
+Click on create dataset
+
+Enter the name and description.
+
+Select evaluation and click next.
+
+Confirm the query and click on create.
 
 == Model Lifecycle for a new BYOM
 
-Download and unzip the files needed, links are at the top of the tutorial. For PMML file you can also download a PMML generated in the training of a GIT model.
+Download and unzip the files needed, links are at the top of the guide. For PMML file you can also download a PMML generated in the training of a GIT model.
 
 * BYOM.ipynb
 
