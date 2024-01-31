@@ -1,0 +1,245 @@
+= ModelOps - Import and Deploy your first in-database analytics model 
+:experimental:
+:page-author: Gabriel Cordova
+:page-email: gabriel.cordova@teradata.com
+:page-revdate: January 30th, 2024
+:description: Tutorial for deploying and monitoring in database models into Vantage using ModelOps.
+:keywords: modelops, python, git, clearscape analytics, teradata, data warehouses, teradata, vantage, cloud data platform, machine learning, artificial intelligence, business intelligence, enterprise analytics
+
+== Overview
+
+This is a how-to for people who are new to ClearScape Analytics ModelOps. In the tutorial, you will be able to create a new project in ModelOps, upload the required data to Vantage, and track the full lifecycle of a demo model using Teradata's in-database models in ModelOps.
+
+== Prerequisites
+
+* Access to a Teradata Vantage instance with ClearScape Analytics (includes ModelOps)
+
+* Ability to run Jupyter notebooks
+
+include::ROOT:partial$vantage_clearscape_analytics.adoc[]
+
+Files needed
+
+Let's start by downloading the needed files for this tutorial. Download these 4 attachments and upload them in your Notebook filesystem.
+
+ModelOps version 7 (April 2023):
+
+link:{attachmentsdir}/ModelOps_Training_v7.ipynb[Download the ModelOps training Notebook]
+
+link:{attachmentsdir}/BYOM_v7.ipynb[Download BYOM Notebook file for demo use case]
+
+link:{attachmentsdir}/ModelOps_Data_files_v7.zip[Download data files for demo use case]
+
+link:{attachmentsdir}/ModelOps_BYOM_files_v7.zip[Download BYOM code files for demo use case]
+
+Alternatively you can git clone following repos
+[source, cli]
+----
+git clone -b v7 https://github.com/willfleury/modelops-getting-started.git
+git clone https://github.com/Teradata/modelops-demo-models/
+----
+
+== Understand where we are in the Methodology
+
+image::modelops-git.png[ModelOps Methodology GIT screenshot, width=100%]
+
+Setting up the database and Jupyter environment 
+
+Follow the ModelOps_Training Jupyter Notebook to setup the database, tables and libraries needed for the demo.
+
+== Create a project
+
+Login into ModelOps and navigate to the Projects screen.
+
+image::Projects.png[ModelOps projects screenshot, width=100%]
+
+Click on the CREATE PROJECT button located on the top-right of the screen.
+
+image::Project_Creating.png[ModelOps projects screenshot, width=100%]
+
+* Name: "ModelOps Quickstart"
+
+* Description: "ModelOps BYOM Quickstart"
+
+* Group: your user
+
+* Path: https://github.com/Teradata/modelops-demo-models
+
+* Credentials: No Credentials
+
+* Branch: master
+
+Click the TEST GIT CONNECTION button. If the test is succesful then click on save and continue.
+
+In this guide we will skip creating a service connection and just create a personal connection.
+
+== Create a Personal Connection
+
+image::Personal_Connection.png[ModelOps projects screenshot, width=100%]
+
+* Name: Quickstart Personal
+
+* Description: Quickstart Personal Connection
+
+* Host: ClearScape-url
+
+* Database: "demo_user"
+
+* VAL Database Name: "VAL"
+
+* BYOM Database Name: "MLDB"
+
+* Login Mechanism: "TDNEGO"
+
+* Username: your-username
+
+* Pasword: your-password
+
+Test the connection by clicking on the TEST CONNECTION button.
+
+Click save.
+
+== Prepare code templates
+
+For this models we need to fill the code templates available when adding a new model. 
+
+These code scripts will be stored in the git repository under: model_definitions/your-model/model_modules/
+
+* __init__.py : this an empty file required for python modules
+
+* training.py: this script contains train function
+
+[source, python]
+----
+def train(context: ModelContext, **kwargs):
+    aoa_create_context()
+    
+    # your training code using teradataml indDB function
+    model = <InDB Function>(...)
+    
+    # save your model
+    model.result.to_sql(f"model_${context.model_version}", if_exists="replace")  
+    
+    record_training_stats(...)
+----
+
+Review the Operationalize notebook to see how you can execute this from CLI or from notebook as an alternative to ModelOps UI.	
+
+* evaluation.py: this script contains evaluate function
+
+[source, python]
+----
+def evaluate(context: ModelContext, **kwargs):
+    aoa_create_context()
+
+    # read your model from Vantage
+    model = DataFrame(f"model_${context.model_version}")
+    
+    # your evaluation logic
+    
+    record_evaluation_stats(...)
+----
+
+Review the Operationalize notebook to see how you can execute this from CLI or from notebook as an alternative to ModelOps UI.	
+
+* scoring.py: this script contains score function
+
+[source, python]
+----
+def score(context: ModelContext, **kwargs):
+    aoa_create_context()
+
+    # read your model
+    model = DataFrame(f"model_${context.model_version}")
+    
+    # your evaluation logic
+    
+    record_scoring_stats(...)
+----
+
+Review the Operationalize notebook to see how you can execute this from CLI or from notebook as an alternative to ModelOps UI.	
+
+* requirements.txt: this file contains the library names and versions required for your code scripts. Example:
+
+[source, python]
+----
+%%writefile ../model_modules/requirements.txt
+pandas==1.5.3
+teradataml==17.20.0.4
+teradatamodelops==7.0.3
+matplotlib==3.5.2
+PyYAML==5.4.1
+scikit-learn==1.0.2
+matplotlib==3.5.2
+----
+
+* config.json: this file located in the parent folder (your-model folder) contains default hyper-parameters
+
+[source, python]
+----
+%%writefile ../config.json
+{
+   "hyperParameters": {
+    "model_type": "Classification",
+    "scale_method":"RANGE",
+    "miss_value":"KEEP",
+    "global_scale": "False",
+    "multiplier":"1",
+    "intercept":"0",
+    "max_depth": 8,
+    "num_boosted_trees": 100,
+    "tree_size": 0.5,
+    "lambda1" : 1.5
+    }
+}
+----
+
+Go and review the code scripts for the demo model in the repository: https://github.com/Teradata/modelops-demo-models/
+
+Go into model_definitions->pima_python_indb_xgboost->model_modules
+
+== Model Lifecycle for a new GIT
+
+* Open Project to see models available from GIT
+
+* Train a new model version
+
+* see how CommitID from code repository is tracked
+
+* Evaluate
+
+* Review evaluation report, including dataset statistics and model metrics
+
+* Compare with other model versions
+
+* Approve
+
+* Deploy in Vantage - Engine, Publish, Schedule. Scoring dataset is required
+Use your connection and select a database. e.g "aoa_byom_models"
+
+* Deploy in Docker Batch  - Engine, Publish, Schedule. Scoring dataset is required
+Use your connection and select a database. e.g "aoa_byom_models"
+
+* Deploy in Restful Batch  - Engine, Publish, Schedule. Scoring dataset is required
+Use your connection and select a database. e.g "aoa_byom_models"
+
+* Deployments/executions
+
+* Evaluate again with dataset2 - to monitor model metrics behavior
+
+* Monitor Model Drift - data and metrics
+
+* Open BYOM notebook to execute the PMML predict from SQL code when deployed in Vantage
+
+* Test Restful from ModelOps UI or from curl command
+
+* Retire deployments
+
+== Summary
+
+In this quick start we have learned how to follow a full lifecycle of in-database models into ModelOps and how to deploy them into Vantage or into Docker containers for Edge deployments. Then how we can schedule a batch scoring or test restful or on-demand scorings and start monitoring on Data Drift and Model Quality metrics.
+
+== Further reading
+* link:https://docs.teradata.com/search/documents?query=ModelOps&sort=last_update&virtual-field=title_only&content-lang=
+
+include::ROOT:partial$community_link.adoc[]
